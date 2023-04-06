@@ -1,0 +1,61 @@
+on:
+  push:
+    branches:
+       main
+jobs:
+  lambda:
+    name: lambda deploy
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+        
+      - name: zip the function folder
+        run: zip -r my-package.zip module/python
+        shell: bash
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1   
+        
+      - name: Upload function zip file to S3
+        run: aws s3 cp my-package.zip s3://gjygju/my-package.zip
+
+      - name: Update lambda function code
+        run: aws lambda update-function-code --function-name test-lambda --s3-bucket gjygju --s3-key my-package.zip
+        
+      - name: set up python
+        uses: actions/setup-python@v4
+        with:
+         python-version: '3.9'
+         
+      - name: create directory to install requirements
+        run: mkdir -p layer/python/lib/python3.9/site-packages
+         
+      - name: install dependency
+        run: pip3 install -r requirements.txt -t layer/python/lib/python3.9/site-packages/
+          
+      
+      - name: zip the dependency
+        working-directory: layer
+        run: zip -r dependency.zip *
+        
+      - name: upload dependency zip to s3
+        working-directory: layer
+        run: aws s3 cp dependency.zip s3://gjygju/dependency.zip
+        
+      - name: Update lambda layer
+        run: |
+          echo "LayerVersionArn=$(aws lambda publish-layer-version --layer-name lambda-layer --content S3Bucket=gjygju,S3Key=dependency.zip --query 'LayerVersionArn')" >> $GITHUB_OUTPUT
+        id: layerversion
+        
+        
+      - name: update lambda function layer
+        run: |
+            echo "${{steps.layerversion.outputs.LayerVersionArn}}"
+            aws lambda update-function-configuration --function-name test-lambda --layers "${{steps.layerversion.outputs.LayerVersionArn}}"
+
+
